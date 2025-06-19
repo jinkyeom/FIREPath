@@ -1,1 +1,15 @@
+streamlit==1.32.2
+feedparser
+requests
+beautifulsoup4
+trafilatura
+readability-lxml
+newspaper3k
+lxml[html_clean]>=5.4
+transformers
+sentencepiece
+torch
+yfinance
+pandas
+streamlit-autorefresh
 nltk
