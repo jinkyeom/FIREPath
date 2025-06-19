@@ -67,23 +67,59 @@ def get_article_text(url: str) -> str:
         return ""
 
 # ───────── Google News RSS 크롤러 ─────────
-def _resolve_google_url(url: str) -> str:
-    """Google News 중계 URL → 실제 언론사 URL(자바스크립트 리다이렉트 포함)"""
+def google_to_origin(url: str) -> str:
     if "news.google.com" not in url:
         return url
+
+    # 1) ?url= 파라미터
+    qs = ul.urlparse(url).query
+    if "url=" in qs:
+        return ul.parse_qs(qs)["url"][0]
+
+    # 2) /articles/ 형 → base64 디코드
+    m = re.search(r"/articles/([A-Za-z0-9_\-]+)", url)
+    if m:
+        seg = m.group(1) + "=" * (-len(m.group(1)) % 4)   # 패딩
+        try:
+            plain = base64.urlsafe_b64decode(seg).decode("utf-8", "ignore")
+            hit   = re.search(r"https?://[^&\s]+", plain)
+            if hit:
+                return hit.group(0)
+        except Exception:
+            pass
+
+    # 3) HTML 안 meta refresh / og:url / canonical
     try:
-        _driver.get(url)
-        return _driver.current_url          # JS 실행 후 최종 주소
+        html = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"}).text
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in [
+            soup.find("meta", attrs={"http-equiv": "refresh"}),
+            soup.find("meta", property="og:url"),
+            soup.find("link", rel="canonical"),
+            soup.find("a", href=re.compile(r"^https?://")),
+        ]:
+            if tag:
+                href = (tag.get("content") or tag.get("href") or "")
+                if href.startswith("http"):
+                    return href
     except Exception:
-        return url
+        pass
+    return url
 
 def crawl_google_news(keyword: str, max_items: int = 3) -> pd.DataFrame:
-    rss = f"https://news.google.com/rss/search?q={ul.quote(keyword)}&hl=ko&gl=KR&ceid=KR:ko"
-    feed = feedparser.parse(rss)
+    feed = feedparser.parse(
+        f"https://news.google.com/rss/search?q={ul.quote(keyword)}&hl=ko&gl=KR&ceid=KR:ko"
+    )
     rows = []
     for e in feed.entries[:max_items]:
-        real = google_to_origin(e.link)         # ← 새 함수 사용
-        rows.append({"keyword":keyword, "title":e.title, "url":real})
+        rows.append(
+            {
+                "keyword": keyword,
+                "title":   e.title,
+                "url":     google_to_origin(e.link),
+                "date":    datetime.date.today(),
+            }
+        )
     return pd.DataFrame(rows)
 
 # ───────── 기존 네이버 크롤러(crawl_naver) 그대로 두어 백업으로 사용 ─────────
@@ -110,50 +146,6 @@ _driver = webdriver.Chrome(
 )
 
 UA = {"User-Agent": "Mozilla/5.0"}
-
-def google_to_origin(url: str) -> str:
-    """news.google.com (RSS·/articles) 링크 → 실제 언론사 URL"""
-
-    if "news.google.com" not in url:
-        return url
-
-    # 1) ?url= 파라미터로 바로 들어있는 경우
-    q = ul.urlparse(url).query
-    if "url=" in q:
-        return ul.parse_qs(q)["url"][0]
-
-    # 2) /articles/CBMi…  ← Base64 URLSAFE 안에 http(s)://가 들어있음
-    m = re.search(r"/articles/([A-Za-z0-9_\-]+)", url)
-    if m:
-        seg = m.group(1) + "=" * (-len(m.group(1)) % 4)   # 패딩
-        try:
-            plain = base64.urlsafe_b64decode(seg).decode("utf-8", "ignore")
-            hit   = re.search(r"https?://[^&\s]+", plain)
-            if hit:
-                return hit.group(0)
-        except Exception:
-            pass
-
-    # 3) HTML 열어서 meta refresh·<a> href 추출
-    try:
-        html = requests.get(url, headers=UA, timeout=8, allow_redirects=True)
-        if html.history and "news.google.com" not in html.url:
-            return html.url                     # 30x 리다이렉트 성공
-
-        soup = BeautifulSoup(html.text, "html.parser")
-        # 3-A meta refresh
-        meta = soup.find("meta", attrs={"http-equiv": "refresh"})
-        if meta and "url=" in meta["content"]:
-            return meta["content"].split("url=")[1]
-
-        # 3-B 첫 번째 외부 링크
-        a = soup.find("a", href=re.compile(r"^https?://"))
-        if a:
-            return a["href"]
-    except Exception:
-        pass
-
-    return url   # 전부 실패하면 원본 그대로
 
 def google_articles_to_origin(url: str) -> str:
     """
