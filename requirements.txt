@@ -2,14 +2,17 @@ streamlit==1.32.2
 feedparser
 requests
 beautifulsoup4
-trafilatura
+pandas
+yfinance
+# ─ 본문 파싱용 ─
+trafilatura==2.0.0
 readability-lxml
-newspaper3k
 lxml[html_clean]>=5.4
+newspaper3k
+# ─ 요약 모델 ─
 transformers
 sentencepiece
 torch
-yfinance
-pandas
+# ─ 기타 ─
 streamlit-autorefresh
 nltk
