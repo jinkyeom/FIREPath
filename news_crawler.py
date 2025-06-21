@@ -4,10 +4,6 @@ from newspaper import Article
 import trafilatura
 from readability import Document
 import lxml.html
-from selenium import webdriver
-from selenium.webdriver.chrome.options import Options
-from webdriver_manager.chrome import ChromeDriverManager
-from selenium.webdriver.chrome.service import Service
 
 # ──────────────────
 # 1) 네이버 검색 뉴스 크롤링
@@ -46,7 +42,7 @@ def crawl_naver(keyword: str, pages: int = 1) -> pd.DataFrame:
 # 2) 기사 본문 추출
 # ──────────────────
 def get_article_text(url: str) -> str:
-    """trafilatura → readability → newspaper 순 본문 추출"""
+    # trafilatura → newspaper3k 백업
     try:
         txt = trafilatura.extract(trafilatura.fetch_url(url), include_comments=False)
         if txt and len(txt) > 120:
@@ -54,43 +50,48 @@ def get_article_text(url: str) -> str:
     except Exception:
         pass
     try:
-        html = requests.get(url, timeout=8).text
-        clean = lxml.html.fromstring(Document(html).summary()).text_content()
-        if len(clean) > 120:
-            return clean
-    except Exception:
-        pass
-    try:
-        art = Article(url); art.download(); art.parse()
+        art = Article(url, language="ko"); art.download(); art.parse()
         return art.text
     except Exception:
         return ""
 
 # ───────── Google News RSS 크롤러 ─────────
+UA = {"User-Agent": "Mozilla/5.0"}
+
 def google_to_origin(url: str) -> str:
     if "news.google.com" not in url:
         return url
 
     # 1) ?url= 파라미터
-    qs = ul.urlparse(url).query
-    if "url=" in qs:
-        return ul.parse_qs(qs)["url"][0]
+    q = ul.urlparse(url).query
+    if "url=" in q:
+        return ul.parse_qs(q)["url"][0]
 
-    # 2) /articles/ 형 → base64 디코드
-    m = re.search(r"/articles/([A-Za-z0-9_\-]+)", url)
+    # 2) /articles/…  Base64 URLSAFE 디코드 (더 다양한 패턴 지원)
+    m = re.search(r"/articles/([^?]+)", url)
     if m:
-        seg = m.group(1) + "=" * (-len(m.group(1)) % 4)   # 패딩
-        try:
-            plain = base64.urlsafe_b64decode(seg).decode("utf-8", "ignore")
-            hit   = re.search(r"https?://[^&\s]+", plain)
-            if hit:
-                return hit.group(0)
-        except Exception:
-            pass
+        token = m.group(1)
 
-    # 3) HTML 안 meta refresh / og:url / canonical
+        # 일부 토큰은 'CB...' 'CA...' 접두사가 붙어 있어 디코딩이 실패할 수 있으므로
+        # 여러 위치를 시도하며 첫 http 링크가 나오면 반환한다.
+        for start in range(0, min(8, len(token))):
+            seg = token[start:]
+            if not seg:
+                continue
+            seg_padded = seg + "=" * (-len(seg) % 4)
+            try:
+                plain = base64.urlsafe_b64decode(seg_padded).decode("utf-8", "ignore")
+                hit = re.search(r"https?://[^&\s]+", plain)
+                if hit:
+                    href = hit.group(0)
+                    if href.startswith("http") and "news.google.com" not in href:
+                        return href
+            except Exception:
+                continue
+
+    # 3) 중계 HTML → meta / a[href] 파싱
     try:
-        html = requests.get(url, timeout=8, headers={"User-Agent":"Mozilla/5.0"}).text
+        html = requests.get(url, headers=UA, timeout=8).text
         soup = BeautifulSoup(html, "html.parser")
         for tag in [
             soup.find("meta", attrs={"http-equiv": "refresh"}),
@@ -100,24 +101,69 @@ def google_to_origin(url: str) -> str:
         ]:
             if tag:
                 href = (tag.get("content") or tag.get("href") or "")
-                if href.startswith("http"):
+                if href.startswith("http") and "news.google.com" not in href:
                     return href
+    except Exception:
+        pass
+
+    # 4) Google internal API decoding (fallback)
+    try:
+        # gn_id 추출
+        gn_match = re.search(r"/articles/([^?]+)", url)
+        if gn_match:
+            gn_id = gn_match.group(1)
+
+            # Step A: 기사 페이지에서 signature, timestamp 수집
+            page = requests.get(f"https://news.google.com/rss/articles/{gn_id}", headers=UA, timeout=8)
+            soup = BeautifulSoup(page.text, "lxml")
+            div  = soup.select_one("c-wiz > div")
+            if div and div.get("data-n-a-sg") and div.get("data-n-a-ts"):
+                sg = div["data-n-a-sg"]
+                ts = div["data-n-a-ts"]
+
+                # Step B: batchexecute 호출로 원본 URL 디코딩
+                req = [
+                    "Fbv4je",
+                    (
+                        "[\"garturlreq\","  # 메서드명\n"
+                        "[[\"X\",\"X\",[\"X\",\"X\"],null,null,1,1,\"US:en\",null,1,null,null,null,null,null,0,1],"
+                        "\"X\",\"X\",1,[1,1,1],1,1,null,0,0,null,0],"
+                        f"\"{gn_id}\",{ts},\"{sg}\"]"
+                    )
+                ]
+
+                import json, urllib.parse
+                payload = "f.req=" + urllib.parse.quote(json.dumps([[req]]))
+                resp = requests.post(
+                    "https://news.google.com/_/DotsSplashUi/data/batchexecute",
+                    headers={"Content-Type": "application/x-www-form-urlencoded;charset=UTF-8"},
+                    data=payload,
+                    timeout=8,
+                )
+                if resp.ok and "[" in resp.text:
+                    try:
+                        body = resp.text.split("\n\n")[1]
+                        arr  = json.loads(body)
+                        decoded = json.loads(arr[0][2])[1]
+                        if decoded.startswith("http") and "news.google.com" not in decoded:
+                            return decoded
+                    except Exception:
+                        pass
     except Exception:
         pass
     return url
 
 def crawl_google_news(keyword: str, max_items: int = 3) -> pd.DataFrame:
-    feed = feedparser.parse(
-        f"https://news.google.com/rss/search?q={ul.quote(keyword)}&hl=ko&gl=KR&ceid=KR:ko"
-    )
+    rss = f"https://news.google.com/rss/search?q={ul.quote(keyword)}&hl=ko&gl=KR&ceid=KR:ko"
+    feed = feedparser.parse(rss)
     rows = []
     for e in feed.entries[:max_items]:
         rows.append(
             {
                 "keyword": keyword,
-                "title":   e.title,
-                "url":     google_to_origin(e.link),
-                "date":    datetime.date.today(),
+                "title": e.title,
+                "url": google_to_origin(e.link),
+                "date": datetime.date.today(),
             }
         )
     return pd.DataFrame(rows)
@@ -136,53 +182,3 @@ def crawl_newsapi(keyword, page_size=5):
         "date"   : datetime.datetime.fromisoformat(a["publishedAt"][:19]).date()
     } for a in data.get("articles", [])]
     return pd.DataFrame(rows)
-
-# 1) Selenium 헤드리스 브라우저 1회 초기화
-_opts = Options()
-_opts.add_argument("--headless=new")
-_driver = webdriver.Chrome(
-    service=Service(ChromeDriverManager().install()),
-    options=_opts,
-)
-
-UA = {"User-Agent": "Mozilla/5.0"}
-
-def google_articles_to_origin(url: str) -> str:
-    """
-    https://news.google.com/rss/articles/CBMi… → 원본 기사 URL
-    ① ?url= 파라미터가 있으면 그대로 사용
-    ② /articles/ 뒷부분(Base64-URLSAFE) 디코드
-    ③ 실패 시 meta og:url·canonical 태그 파싱
-    """
-    if "news.google.com" not in url:
-        return url
-
-    # 1) ?url= 파라미터
-    qs = ul.urlparse(url).query
-    if "url=" in qs:
-        return ul.parse_qs(qs)["url"][0]
-
-    # 2) /articles/CBMi… 디코드
-    m = re.search(r"/articles/([A-Za-z0-9_\-]+)", url)
-    if m:
-        seg = m.group(1)
-        seg += "=" * (-len(seg) % 4)              # 패딩 보정
-        try:
-            decoded = base64.urlsafe_b64decode(seg).decode("utf-8", "ignore")
-            hit = re.search(r"https?://[^&\s]+", decoded)
-            if hit:
-                return hit.group(0)
-        except Exception:
-            pass
-
-    # 3) 마지막 – 실제 페이지 요청 후 meta 태그 파싱
-    try:
-        html = requests.get(url, headers={"User-Agent":"Mozilla/5.0"}, timeout=8).text
-        for pattern in [r'<meta property="og:url" content="([^"]+)"',
-                        r'<link rel="canonical" href="([^"]+)"']:
-            mo = re.search(pattern, html)
-            if mo:
-                return mo.group(1)
-    except Exception:
-        pass
-    return url   # 모든 방법 실패 시 원본 그대로

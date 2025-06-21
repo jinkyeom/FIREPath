@@ -2,7 +2,7 @@ import streamlit as st
 
 # ★ 페이지 설정은 최상단에서 단 한 번!
 st.set_page_config(
-    page_title="주식 뉴스 요약 보드",
+    page_title="주식 뉴스 보드",
     layout="wide",
     page_icon="📰",
 )
@@ -15,55 +15,26 @@ except LookupError:
     nltk.download('punkt', quiet=True)
 
 import pandas as pd
-from news_crawler import crawl_google_news, get_article_text
-from summarizer import summarize
+from news_crawler import crawl_google_news
 from price_fetcher import fetch_prices
 from streamlit_autorefresh import st_autorefresh
+from indicators import add_indicators
+from alerts import check_alerts, Level
+from kakao import send_kakao
 
 # ⬇︎ 5분마다 오토리프레시
 st_autorefresh(interval=300_000, key="auto_refresh")
 
-# ⬇︎ 캐싱된 함수들 선언(load_summarizer, cached_crawl, ...)
+# ⬇︎ 캐싱된 함수들 선언(cached_crawl, ...)
 
-# 1) 무거운 모델은 '자원' 캐시
-@st.cache_resource
-def load_summarizer():
-    from transformers import BartForConditionalGeneration, PreTrainedTokenizerFast
-    model_name = "digit82/kobart-summarization"
-    tok  = PreTrainedTokenizerFast.from_pretrained(model_name)
-    bart = BartForConditionalGeneration.from_pretrained(model_name)
-    return tok, bart
-
-tokenizer, model = load_summarizer()
-
-def summarize_cached(text:str, max_len=1024, summary_len=128) -> str:
-    """요약 전용 래퍼 ‒ 모델·토크나이저는 이미 캐싱됨"""
-    # 데이터 결과만 캐싱
-    @st.cache_data(ttl=24*60*60)   # 24시간 유지
-    def _summ(text):
-        ids = tokenizer.encode(text, max_length=max_len,
-                               truncation=True, return_tensors="pt")
-        out = model.generate(ids, max_length=summary_len,
-                             num_beams=4, early_stopping=True)
-        return tokenizer.decode(out[0], skip_special_tokens=True)
-    return _summ(text)
-
-# 2) 뉴스 크롤링·본문 추출·주가도 전부 '데이터' 캐시
+# 1) 뉴스 크롤링·주가 데이터는 '데이터' 캐시
 @st.cache_data(ttl=3600)
 def cached_crawl(keyword):
     return crawl_google_news(keyword, max_items=3)
 
-@st.cache_data(ttl=24*60*60)       # 24시간 유지
-def cached_article(url:str):
-    return get_article_text(url)   # newspaper3k 사용
-
 @st.cache_data(ttl=30*60)          # 30분 유지
 def cached_price(ticker:str):
     return fetch_prices(ticker, period="3mo")
-
-@st.cache_data(ttl=24*60*60)       # 24시간 유지
-def cached_summary(text:str) -> str:
-    return summarize(text)
 
 #################################################################
 # 1) M7 매핑 테이블 추가
@@ -103,7 +74,7 @@ if use_mag7:
 # 사이드바 하단 : 뉴스 요약 영역
 #################################################################
 st.sidebar.divider()
-st.sidebar.subheader("📰 요약 뉴스 (최근 1건)")
+st.sidebar.subheader("📰 최신 뉴스 (최근 1건)")
 
 max_sidebar_news = 1          # 사이드바에는 종목당 1개만
 for t in tickers:
@@ -112,31 +83,15 @@ for t in tickers:
     if news_df.empty:
         continue
 
-    # 기사 1건씩 요약
+    # 기사 1건씩 링크 표시
     row = news_df.iloc[0]
-    with st.sidebar.expander(f"{keyword} · {row['title'][:25]}..."):
-        st.sidebar.write(row["url"])
-
-        # 요약은 캐싱되어 있으면 즉시, 없으면 1-2초
-        try:
-            full = cached_article(row["url"])
-            if cached_summary(full):    # 이미 캐시된 경우
-                st.sidebar.write(cached_summary(full))
-            else:
-                with st.spinner("요약 생성 중..."):
-                    summ = cached_summary(full)
-                    st.sidebar.write(summ)
-        except Exception as e:
-            summ = f"요약 오류: {e}"
-            st.sidebar.write(summ)
-
-        # ② 디버그: 요약 결과 원문 그대로 출력
-        st.text("요약 DEBUG → " + repr(summ)[:150])
+    with st.sidebar.expander(f"{keyword}"):
+        st.sidebar.markdown(f"[{row['title']}]({row['url']})")
 
 #################################################################
-# 1) 오늘의 뉴스 · 요약  (메인 화면 오른쪽)
+# 1) 오늘의 뉴스
 #################################################################
-st.header("📰 오늘의 뉴스 · 요약")
+st.header("📰 오늘의 뉴스")
 
 for t in tickers:
     keyword = MAG7.get(t, t.split('.')[0])
@@ -152,21 +107,39 @@ for t in tickers:
 
     for _, row in news_df.iterrows():
         st.markdown(f"**{row['title']}**  \n[{row['url']}]({row['url']})")
-
-        full_text = cached_article(row["url"])
-        st.caption(f"본문 길이: {len(full_text)}")      # 디버그
-
-        if not full_text:
-            st.warning("🔗 본문 파싱 실패 – 원문 링크로 이동해 주세요.")
-        else:
-            st.write(cached_summary(full_text))
-
         st.markdown("---")
 
 # 3) 주가 시세
-st.header("📈 주가 차트")
+st.header("📈 주가 차트 & 지표")
 for t in tickers:
-    st.subheader(f"📊 {t} 종가 추이")
     price_df = cached_price(t)
-    st.line_chart(price_df.set_index("Date")["Close"], height=180)
-    st.caption(f"기간: {price_df['Date'].min().date()} ~ {price_df['Date'].max().date()}") 
+    indic_df = add_indicators(price_df)
+
+    st.subheader(f"📊 {t} 종가 · RSI · 거래량")
+    st.line_chart(indic_df.set_index("Date")["Close"], height=180)
+    st.line_chart(indic_df.set_index("Date")["RSI"], height=120)
+    st.bar_chart(indic_df.set_index("Date")["Volume"], height=120)
+
+    # 알림 체크
+    alerts = check_alerts(indic_df)
+    if alerts:
+        msg_join = " · ".join([m for m, _ in alerts])
+        st.error(msg_join)
+    else:
+        st.success("특이사항 없음 ✅")
+
+    st.caption(f"기간: {indic_df['Date'].min().date()} ~ {indic_df['Date'].max().date()}")
+
+    # 화면 출력
+    for msg, lvl in alerts:
+        if lvl == Level.CRIT:
+            st.error(msg)
+        elif lvl == Level.WARN:
+            st.warning(msg)
+        else:
+            st.info(msg)
+
+    # 카카오톡 푸시 (Lv1 이상만)
+    crit_msgs = [m for m,l in alerts if l == Level.CRIT]
+    if crit_msgs:
+        send_kakao(f"{t}: " + " | ".join(crit_msgs)) 

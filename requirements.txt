@@ -16,3 +16,4 @@ torch
 # ─ 기타 ─
 streamlit-autorefresh
 nltk
+selenium
