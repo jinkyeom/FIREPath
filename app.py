@@ -57,18 +57,31 @@ st.sidebar.header("관심 종목 설정")
 # "M7 전체" 한 번에 불러오기용 체크박스
 use_mag7 = st.sidebar.checkbox("💫 Magnificent 7 전체 보기", value=True)
 
-# 기본 후보 목록
-tickers_default = list(MAG7.keys())
-# 멀티셀렉트 – M7 선택 여부 따라 기본값 조정
+# ──────────────────────────────────────────────────────────────
+#  추가: 국내 시총 Top7 (KOSPI)
+# ──────────────────────────────────────────────────────────────
+KTOP7 = {
+    "005930.KS": "삼성전자",
+    "000660.KS": "SK하이닉스",
+    "373220.KS": "LG에너지솔루션",
+    "051910.KS": "LG화학",
+    "207940.KS": "삼성바이오로직스",
+    "005380.KS": "현대차",
+    "035420.KS": "NAVER",
+}
+
+# 통합 매핑 테이블
+SYMBOLS = {**MAG7, **KTOP7}
+
+# 모든 후보 목록 (미국 M7 + 국내 KTOP7)
+all_candidates = list(MAG7.keys()) + list(KTOP7.keys())
+
+# 멀티셀렉트 – M7 체크 여부 따라 기본값 지정
 tickers = st.sidebar.multiselect(
     "티커를 선택/추가하세요",
-    options=tickers_default + ["005930.KS", "035420.KS"],   # 한국 주식 등 추가 가능
-    default=tickers_default if use_mag7 else [],
+    options=all_candidates,
+    default=list(MAG7.keys()) if use_mag7 else [],
 )
-
-# M7 전용 설명
-if use_mag7:
-    st.sidebar.caption("M7: AAPL·MSFT·AMZN·GOOGL·META·TSLA·NVDA")
 
 #################################################################
 # 사이드바 하단 : 뉴스 요약 영역
@@ -78,7 +91,7 @@ st.sidebar.subheader("📰 최신 뉴스 (최근 1건)")
 
 max_sidebar_news = 1          # 사이드바에는 종목당 1개만
 for t in tickers:
-    keyword = MAG7.get(t, t.split('.')[0])
+    keyword = SYMBOLS.get(t, t.split('.')[0])
     news_df = cached_crawl(keyword).head(max_sidebar_news)
     if news_df.empty:
         continue
@@ -94,11 +107,8 @@ for t in tickers:
 st.header("📰 오늘의 뉴스")
 
 for t in tickers:
-    keyword = MAG7.get(t, t.split('.')[0])
+    keyword = SYMBOLS.get(t, t.split('.')[0])
     news_df = cached_crawl(keyword).head(3)
-
-    # ─ 디버그 ─
-    st.write("DEBUG:", keyword, len(news_df))
 
     if news_df.empty:
         continue
@@ -142,4 +152,8 @@ for t in tickers:
     # 카카오톡 푸시 (Lv1 이상만)
     crit_msgs = [m for m,l in alerts if l == Level.CRIT]
     if crit_msgs:
-        send_kakao(f"{t}: " + " | ".join(crit_msgs)) 
+        send_kakao(f"{t}: " + " | ".join(crit_msgs))
+
+# MAG7 안내
+if use_mag7:
+    st.sidebar.caption("M7: AAPL·MSFT·AMZN·GOOGL·META·TSLA·NVDA") 
