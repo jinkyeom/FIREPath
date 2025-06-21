@@ -87,10 +87,15 @@ selected_period = period_map[period_label]
 # 멀티셀렉트 – 기본값: M7+KTOP7 모두 선택
 default_selection = list(MAG7.keys()) + list(KTOP7.keys()) if use_mag7 else list(KTOP7.keys())
 
+def _label(code:str):
+    name = SYMBOLS.get(code, code.split('.')[0])
+    return f"{name} ({code})"
+
 tickers = st.sidebar.multiselect(
     "티커를 선택/추가하세요",
     options=all_candidates,
     default=default_selection,
+    format_func=_label,
 )
 
 #################################################################
