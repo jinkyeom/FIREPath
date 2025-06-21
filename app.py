@@ -21,6 +21,7 @@ from streamlit_autorefresh import st_autorefresh
 from indicators import add_indicators
 from alerts import check_alerts, Level
 from kakao import send_kakao
+from financials import fetch_financials
 
 # ⬇︎ 5분마다 오토리프레시
 st_autorefresh(interval=300_000, key="auto_refresh")
@@ -35,6 +36,11 @@ def cached_crawl(keyword):
 @st.cache_data(ttl=30*60)          # 30분 유지
 def cached_price(ticker:str, period:str):
     return fetch_prices(ticker, period=period)
+
+# 재무 지표 캐시 (12시간)
+@st.cache_data(ttl=12*60*60)
+def cached_financials(ticker:str):
+    return fetch_financials(ticker)
 
 #################################################################
 # 1) M7 매핑 테이블 추가
@@ -54,8 +60,9 @@ MAG7 = {
 #################################################################
 st.sidebar.header("관심 종목 설정")
 
-# "M7 전체" 한 번에 불러오기용 체크박스
-use_mag7 = st.sidebar.checkbox("💫 Magnificent 7 전체 보기", value=True)
+# 전체 보기 체크박스
+use_mag7  = st.sidebar.checkbox("💫 M7 전체 보기",   value=False)
+use_ktop7 = st.sidebar.checkbox("📊 KTOP7 전체 보기", value=True)
 
 # ──────────────────────────────────────────────────────────────
 #  추가: 국내 시총 Top7 (KOSPI)
@@ -85,7 +92,11 @@ period_label = st.sidebar.selectbox("가격 조회 기간", list(period_map.keys
 selected_period = period_map[period_label]
 
 # 멀티셀렉트 – 기본값: M7+KTOP7 모두 선택
-default_selection = list(MAG7.keys()) + list(KTOP7.keys()) if use_mag7 else list(KTOP7.keys())
+default_selection = []
+if use_mag7:
+    default_selection += list(MAG7.keys())
+if use_ktop7:
+    default_selection += list(KTOP7.keys())
 
 def _label(code:str):
     name = SYMBOLS.get(code, code.split('.')[0])
@@ -120,24 +131,7 @@ for t in tickers:
 # 메인 탭 레이아웃 (뉴스 / 차트)
 #################################################################
 
-news_tab, chart_tab = st.tabs(["📰 뉴스", "📈 차트·지표"])
-
-###############  뉴스 탭  ###############
-with news_tab:
-    st.header("📰 오늘의 뉴스")
-
-    for t in tickers:
-        keyword = SYMBOLS.get(t, t.split('.')[0])
-        news_df = cached_crawl(keyword).head(3)
-
-        if news_df.empty:
-            continue
-
-        st.subheader(f"🔖 {keyword}")
-
-        for _, row in news_df.iterrows():
-            st.markdown(f"**{row['title']}**  \n[{row['url']}]({row['url']})")
-            st.markdown("---")
+chart_tab, news_tab = st.tabs(["📈 차트·지표", "📰 뉴스"])
 
 ###############  차트·지표 탭 ###############
 with chart_tab:
@@ -147,7 +141,21 @@ with chart_tab:
         price_df = cached_price(t, selected_period)
         indic_df = add_indicators(price_df)
 
-        st.subheader(f"📊 {t} 종가 · RSI · 거래량")
+        comp = SYMBOLS.get(t, t.split('.')[0])
+        st.subheader(f"📊 {comp} ({t})")
+
+        # ─ 재무 지표 미니 카드 ─
+        fin = cached_financials(t)
+        col1, col2, col3 = st.columns(3)
+        if fin["ROE"] is not None:
+            col1.metric("ROE", f"{fin['ROE']*100:.1f} %")
+        if fin["PBR"] is not None:
+            col2.metric("PBR", f"{fin['PBR']:.2f}")
+        if fin["PER"] is not None:
+            col3.metric("PER", f"{fin['PER']:.1f}")
+
+        st.caption("가격·지표 차트")
+
         # 가격 + Bollinger Band
         price_band = indic_df.set_index("Date")[["Close","BBL_20_2.0","BBU_20_2.0"]]
         st.line_chart(price_band, height=200)
@@ -185,4 +193,32 @@ with chart_tab:
 
 # MAG7 안내
 if use_mag7:
-    st.sidebar.caption("M7: AAPL·MSFT·AMZN·GOOGL·META·TSLA·NVDA") 
+    st.sidebar.caption("M7: AAPL·MSFT·AMZN·GOOGL·META·TSLA·NVDA")
+
+# ###############  뉴스 탭  ###############
+with news_tab:
+    st.header("📰 오늘의 뉴스")
+
+    if "news_loaded" not in st.session_state:
+        st.session_state["news_loaded"] = False
+
+    if not st.session_state["news_loaded"]:
+        if st.button("🔄 뉴스 불러오기"):
+            st.session_state["news_loaded"] = True
+            st.experimental_rerun()
+        st.info("뉴스 로드를 위해 버튼을 눌러주세요.")
+        st.stop()
+
+    # --- 실제 뉴스 로드 ---
+    for t in tickers:
+        keyword = SYMBOLS.get(t, t.split('.')[0])
+        news_df = cached_crawl(keyword).head(3)
+
+        if news_df.empty:
+            continue
+
+        st.subheader(f"🔖 {keyword}")
+
+        for _, row in news_df.iterrows():
+            st.markdown(f"**{row['title']}**  \n[{row['url']}]({row['url']})")
+            st.markdown("---") 
