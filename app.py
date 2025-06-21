@@ -33,8 +33,8 @@ def cached_crawl(keyword):
     return crawl_google_news(keyword, max_items=3)
 
 @st.cache_data(ttl=30*60)          # 30분 유지
-def cached_price(ticker:str):
-    return fetch_prices(ticker, period="3mo")
+def cached_price(ticker:str, period:str):
+    return fetch_prices(ticker, period=period)
 
 #################################################################
 # 1) M7 매핑 테이블 추가
@@ -76,11 +76,21 @@ SYMBOLS = {**MAG7, **KTOP7}
 # 모든 후보 목록 (미국 M7 + 국내 KTOP7)
 all_candidates = list(MAG7.keys()) + list(KTOP7.keys())
 
-# 멀티셀렉트 – M7 체크 여부 따라 기본값 지정
+# 기간 선택
+period_map = {
+    "1개월":"1mo","3개월":"3mo","6개월":"6mo",
+    "1년":"1y","3년":"3y","5년":"5y","전체":"max"
+}
+period_label = st.sidebar.selectbox("가격 조회 기간", list(period_map.keys()), index=1)
+selected_period = period_map[period_label]
+
+# 멀티셀렉트 – 기본값: M7+KTOP7 모두 선택
+default_selection = list(MAG7.keys()) + list(KTOP7.keys()) if use_mag7 else list(KTOP7.keys())
+
 tickers = st.sidebar.multiselect(
     "티커를 선택/추가하세요",
     options=all_candidates,
-    default=list(MAG7.keys()) if use_mag7 else [],
+    default=default_selection,
 )
 
 #################################################################
@@ -129,7 +139,7 @@ with chart_tab:
     st.header("📈 주가 차트 & 지표")
 
     for t in tickers:
-        price_df = cached_price(t)
+        price_df = cached_price(t, selected_period)
         indic_df = add_indicators(price_df)
 
         st.subheader(f"📊 {t} 종가 · RSI · 거래량")
