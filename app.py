@@ -148,8 +148,15 @@ with chart_tab:
         indic_df = add_indicators(price_df)
 
         st.subheader(f"📊 {t} 종가 · RSI · 거래량")
-        st.line_chart(indic_df.set_index("Date")["Close"], height=180)
+        # 가격 + Bollinger Band
+        price_band = indic_df.set_index("Date")[["Close","BBL_20_2.0","BBU_20_2.0"]]
+        st.line_chart(price_band, height=200)
         st.line_chart(indic_df.set_index("Date")["RSI"], height=120)
+        # MACD
+        macd_cols = [c for c in indic_df.columns if c.startswith("MACD")]
+        st.line_chart(indic_df.set_index("Date")[macd_cols], height=120)
+        # Stochastic
+        st.line_chart(indic_df.set_index("Date")[["STOCHk_14_3_3","STOCHd_14_3_3"]], height=120)
         st.bar_chart(indic_df.set_index("Date")["Volume"], height=120)
 
         # 알림 체크

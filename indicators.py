@@ -13,6 +13,14 @@ def add_indicators(df: pd.DataFrame) -> pd.DataFrame:
     macd = ta.macd(data["Close"], fast=12, slow=26, signal=9)
     data = pd.concat([data, macd], axis=1)
 
+    # Bollinger Bands (20, 2.0)
+    bb = ta.bbands(data["Close"], length=20, std=2.0)
+    data = pd.concat([data, bb], axis=1)
+
+    # Stochastic Oscillator (14,3,3)
+    stoch = ta.stoch(data["High"], data["Low"], data["Close"], k=14, d=3)
+    data = pd.concat([data, stoch], axis=1)
+
     # 20-day volume moving average
     if "Volume" in data.columns:
         data["VOL_MA20"] = data["Volume"].rolling(20).mean()
