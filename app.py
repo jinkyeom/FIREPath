@@ -102,57 +102,64 @@ for t in tickers:
         st.sidebar.markdown(f"[{row['title']}]({row['url']})")
 
 #################################################################
-# 1) 오늘의 뉴스
+# 메인 탭 레이아웃 (뉴스 / 차트)
 #################################################################
-st.header("📰 오늘의 뉴스")
 
-for t in tickers:
-    keyword = SYMBOLS.get(t, t.split('.')[0])
-    news_df = cached_crawl(keyword).head(3)
+news_tab, chart_tab = st.tabs(["📰 뉴스", "📈 차트·지표"])
 
-    if news_df.empty:
-        continue
+###############  뉴스 탭  ###############
+with news_tab:
+    st.header("📰 오늘의 뉴스")
 
-    st.subheader(f"🔖 {keyword}")
+    for t in tickers:
+        keyword = SYMBOLS.get(t, t.split('.')[0])
+        news_df = cached_crawl(keyword).head(3)
 
-    for _, row in news_df.iterrows():
-        st.markdown(f"**{row['title']}**  \n[{row['url']}]({row['url']})")
-        st.markdown("---")
+        if news_df.empty:
+            continue
 
-# 3) 주가 시세
-st.header("📈 주가 차트 & 지표")
-for t in tickers:
-    price_df = cached_price(t)
-    indic_df = add_indicators(price_df)
+        st.subheader(f"🔖 {keyword}")
 
-    st.subheader(f"📊 {t} 종가 · RSI · 거래량")
-    st.line_chart(indic_df.set_index("Date")["Close"], height=180)
-    st.line_chart(indic_df.set_index("Date")["RSI"], height=120)
-    st.bar_chart(indic_df.set_index("Date")["Volume"], height=120)
+        for _, row in news_df.iterrows():
+            st.markdown(f"**{row['title']}**  \n[{row['url']}]({row['url']})")
+            st.markdown("---")
 
-    # 알림 체크
-    alerts = check_alerts(indic_df)
-    if alerts:
-        msg_join = " · ".join([m for m, _ in alerts])
-        st.error(msg_join)
-    else:
-        st.success("특이사항 없음 ✅")
+###############  차트·지표 탭 ###############
+with chart_tab:
+    st.header("📈 주가 차트 & 지표")
 
-    st.caption(f"기간: {indic_df['Date'].min().date()} ~ {indic_df['Date'].max().date()}")
+    for t in tickers:
+        price_df = cached_price(t)
+        indic_df = add_indicators(price_df)
 
-    # 화면 출력
-    for msg, lvl in alerts:
-        if lvl == Level.CRIT:
-            st.error(msg)
-        elif lvl == Level.WARN:
-            st.warning(msg)
+        st.subheader(f"📊 {t} 종가 · RSI · 거래량")
+        st.line_chart(indic_df.set_index("Date")["Close"], height=180)
+        st.line_chart(indic_df.set_index("Date")["RSI"], height=120)
+        st.bar_chart(indic_df.set_index("Date")["Volume"], height=120)
+
+        # 알림 체크
+        alerts = check_alerts(indic_df)
+        if alerts:
+            msg_join = " · ".join([m for m, _ in alerts])
+            st.error(msg_join)
         else:
-            st.info(msg)
+            st.success("특이사항 없음 ✅")
 
-    # 카카오톡 푸시 (Lv1 이상만)
-    crit_msgs = [m for m,l in alerts if l == Level.CRIT]
-    if crit_msgs:
-        send_kakao(f"{t}: " + " | ".join(crit_msgs))
+        st.caption(f"기간: {indic_df['Date'].min().date()} ~ {indic_df['Date'].max().date()}")
+
+        # 화면 출력
+        for msg, lvl in alerts:
+            if lvl == Level.CRIT:
+                st.error(msg)
+            elif lvl == Level.WARN:
+                st.warning(msg)
+            else:
+                st.info(msg)
+
+        # 카카오톡 푸시 (Lv1 이상만)
+        crit_msgs = [m for m,l in alerts if l == Level.CRIT]
+        if crit_msgs:
+            send_kakao(f"{t}: " + " | ".join(crit_msgs))
 
 # MAG7 안내
 if use_mag7:

@@ -1,7 +1,13 @@
-import requests, time, streamlit as st
+import requests, time, json, streamlit as st
 
-def send_kakao(text):
-    token = st.secrets["KAKAO"]["ACCESS"]
+def send_kakao(text: str):
+    """카카오톡 텍스트 메시지 전송.
+    로컬 개발 환경이나 secrets.toml 미설정 시 예외 없이 무시한다."""
+    try:
+        token = st.secrets["KAKAO"]["ACCESS"]
+    except (FileNotFoundError, KeyError):
+        # 배포 환경이 아니면 그냥 패스
+        return
     url   = "https://kapi.kakao.com/v2/api/talk/memo/default/send"
     payload = {
         "template_object": json.dumps({
