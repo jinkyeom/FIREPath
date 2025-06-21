@@ -17,3 +17,5 @@ torch
 streamlit-autorefresh
 nltk
 selenium
+pandas_ta
+ta
